@@ -1,3 +1,3 @@
-import { SupplierReservationsScreen } from '../../frontend/screens/supplierScreens';
+import { AdminBookingsScreen } from '../../frontend/screens/AdminBookingsScreen';
 import { useCompatNavigation } from '../../frontend/navigation/navigationCompat';
-export default function Screen() { return <SupplierReservationsScreen admin navigation={useCompatNavigation()} />; }
+export default function Screen() { return <AdminBookingsScreen navigation={useCompatNavigation()} />; }

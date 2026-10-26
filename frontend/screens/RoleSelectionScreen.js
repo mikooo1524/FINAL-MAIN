@@ -7,8 +7,7 @@ import SignOutButton from '../components/SignOutButton';
 
 const roles = [
   { key: 'CustomerTabs', icon: 'users', title: 'Continue as Customer', description: 'Browse equipment and manage your rentals.' },
-  { key: 'SupplierTabs', icon: 'cube', title: 'Continue as Supplier', description: 'Manage equipment and view reservations.' },
-  { key: 'Admin', icon: 'chart', title: 'Administrator', description: 'Manage users, bookings, and reports.' },
+  { key: 'Admin', icon: 'chart', title: 'Administrator', description: 'Manage users, equipment, bookings, and reports.' },
 ];
 
 function EventTent() {
@@ -30,8 +29,8 @@ function ChairIcon() {
 
 export default function RoleSelectionScreen({ navigation }) {
   const { width } = useWindowDimensions();
-  const { customer, canAccessCustomer, canAccessSupplier, canAccessAdmin } = useApp();
-  const availableRoles = roles.filter(role => role.key === 'CustomerTabs' ? canAccessCustomer : role.key === 'SupplierTabs' ? canAccessSupplier : canAccessAdmin);
+  const { customer, canAccessCustomer, canAccessAdmin } = useApp();
+  const availableRoles = roles.filter(role => role.key === 'CustomerTabs' ? canAccessCustomer : canAccessAdmin);
   const openAuth = mode => navigation.navigate('CustomerAuth', { mode });
   return <SafeAreaView style={styles.safe}>
     <ScrollView contentContainerStyle={styles.scroll}>

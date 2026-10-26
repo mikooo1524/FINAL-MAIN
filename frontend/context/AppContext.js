@@ -2,7 +2,7 @@ import { Alert } from '../components/feedback';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as Crypto from 'expo-crypto';
 import { useSQLiteContext } from 'expo-sqlite';
-import { getCart, persistCart, getCustomerRentals, getEquipment, registerCustomer, signInCustomer } from '../../backend/data/database';
+import { getCart, persistCart, getCustomerRentals, getEquipment, registerCustomer, revokeSession, signInCustomer } from '../../backend/data/database';
 
 // Context shares SQLite-backed lists and cart state across nested screens.
 const AppContext = createContext(null);
@@ -14,11 +14,8 @@ export function AppProvider({ children }) {
   const [customer, setCustomer] = useState(null);
   const [cartState, setCartState] = useState({ owner: null, items: [] });
   const customerId = customer?.role === 'customer' ? customer.user_id : null;
-  const canSwitchRoles = customer?.role === 'admin';
   const canAccessCustomer = customer?.role === 'customer';
-  const canAccessSupplier = !!customer && (canSwitchRoles || customer.role === 'supplier');
   const canAccessAdmin = !!customer && (customer.role === 'admin');
-  const canAccessManagement = canAccessSupplier || canAccessAdmin;
   const currentCustomer = useRef(null);
   const cart = useMemo(() => cartState.owner === customerId ? cartState.items : [], [cartState, customerId]);
   const cartReady = customerId !== null && cartState.owner === customerId;
@@ -67,9 +64,10 @@ export function AppProvider({ children }) {
   const signIn = useCallback(async (email, password) => acceptCustomer(await signInCustomer(db, email, password, Crypto.getRandomBytesAsync)), [db, acceptCustomer]);
   const register = useCallback(async (form, setupAdministrator = false) => acceptCustomer(await registerCustomer(db, form, Crypto.getRandomBytesAsync, setupAdministrator)), [db, acceptCustomer]);
   const signOut = useCallback(() => {
+    revokeSession(db, customer);
     currentCustomer.current = null;
     setCustomer(null); setCartState({ owner: null, items: [] }); setRentals([]); setBookingDraft(null);
-  }, []);
+  }, [db, customer]);
   const addToCart = useCallback((item, quantity = 1) => {
     if (!cartReady) throw new Error('Please wait for your cart to load.');
     if (!item.is_active || item.total_quantity < 1) throw new Error('This equipment is out of stock.');
@@ -105,7 +103,7 @@ export function AppProvider({ children }) {
   const value = useMemo(
     () => ({
       db,
-      customer, signIn, register, signOut, cartReady, canSwitchRoles, canAccessManagement, canAccessCustomer, canAccessSupplier, canAccessAdmin,
+      customer, signIn, register, signOut, cartReady, canAccessCustomer, canAccessAdmin,
       equipment,
       rentals,
       cart,
@@ -120,7 +118,7 @@ export function AppProvider({ children }) {
     }),
     [
       db,
-      customer, signIn, register, signOut, cartReady, setCart, canSwitchRoles, canAccessManagement, canAccessCustomer, canAccessSupplier, canAccessAdmin,
+      customer, signIn, register, signOut, cartReady, setCart, canAccessCustomer, canAccessAdmin,
       equipment,
       rentals,
       cart,

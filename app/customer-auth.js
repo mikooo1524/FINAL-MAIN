@@ -39,7 +39,7 @@ export default function CustomerAuthScreen() {
     } catch (reason) { setError(reason.message); }
     finally { setBusy(false); }
   }
-  if (customer) return <Redirect href={customer.role === 'supplier' ? '/(supplier)' : customer.role === 'admin' ? '/(admin)' : '/(customer)'} />;
+  if (customer) return <Redirect href={customer.role === 'admin' ? '/(admin)' : '/(customer)'} />;
   return <KeyboardAvoidingView style={[styles.overlay, { paddingTop: Math.max(20, insets.top), paddingBottom: Math.max(20, insets.bottom) }]}
     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
     <Pressable accessibilityRole="button" accessibilityLabel="Dismiss customer sign in" disabled={busy} onPress={close} style={styles.backdrop} />

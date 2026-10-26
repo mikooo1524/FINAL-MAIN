@@ -10,11 +10,14 @@
     "plugins": [
       "expo-sqlite",
       "expo-router",
-      ["expo-image-picker", {
-        "photosPermission": "Allow EventGear to access your photos to add equipment product images.",
-        "cameraPermission": false,
-        "microphonePermission": false
-      }]
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow EventGear to access your photos to add equipment product images.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
     ],
     "ios": {
       "supportsTablet": true
@@ -29,6 +32,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c14b13b6-dea9-46a3-b82e-63df2f53ea77"
+      }
     }
   }
 }

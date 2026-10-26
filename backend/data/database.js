@@ -1,63 +1,38 @@
 import { dummyPasswordHash, hashPassword, needsPasswordMigration, verifyPassword } from '../services/passwords.js';
 import { administratorPasswordHash, administratorUsername } from '../services/fixedAdministrator.js';
 
-// Match legacy identities rather than treating all low IDs as demo users.
-const legacyDemoPredicate = `(u.user_id = 1 AND u.name = 'Demo Customer')
- OR (u.user_id = 2 AND u.name = 'EventGear Supplier')
- OR (u.user_id = 3 AND u.name = 'Demo Administrator')
- OR (lower(trim(u.name)) = 'userdemo')`;
+import { migrateDatabase } from './schemaMigration.js';
 
-// Keep demo identities out of administrator user lists and totals, even if recreated.
-const visibleAdminUserPredicate = `u.demo_access = 0 AND lower(trim(u.name)) NOT IN (
-  'demo customer', 'customer demo', 'eventgear supplier', 'supplier demo',
-  'demo administrator', 'admin demo', 'userdemo')`;
+const visibleAdminCustomerPredicate = "u.role = 'customer' AND u.demo_access = 0";
 
-const visibleAdminCustomerPredicate = `u.role = 'customer' AND (${visibleAdminUserPredicate})`;
-
-async function removeLegacyDemoAccounts(db, administratorId) {
- if (await db.getFirstAsync("SELECT value FROM app_settings WHERE key = 'demo_accounts_removed_v2'")) return;
- const accounts = await db.getAllAsync(`SELECT u.user_id FROM users u LEFT JOIN customer_credentials c ON c.user_id = u.user_id WHERE ${legacyDemoPredicate}`);
- for (const { user_id: id } of accounts) {
-  if (id === administratorId) continue;
-  await db.runAsync('UPDATE equipment SET supplier_id = ? WHERE supplier_id = ?', administratorId, id);
-  await db.runAsync('UPDATE reservations SET customer_id = ? WHERE customer_id = ?', administratorId, id);
-  await db.runAsync('DELETE FROM users WHERE user_id = ?', id);
- }
- await db.runAsync('UPDATE users SET demo_access = 0 WHERE demo_access <> 0');
- await db.runAsync("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('demo_accounts_removed_v2', '1')");
+// Only profiles returned by this connection's authentication flow can perform
+// privileged actions. A customer ID or a forged role object is not sufficient.
+const sessions = new WeakMap();
+function rememberSession(db, profile) {
+  if (!sessions.has(db)) sessions.set(db, new WeakSet());
+  const session = Object.freeze(profile);
+  sessions.get(db).add(session);
+  return session;
 }
-
-// One-time removal of the two customer accounts explicitly identified by the user.
-// Match the full identities so unrelated accounts and reused IDs remain untouched.
-async function removeRequestedCustomerAccounts(db, administratorId = null) {
-  if (await db.getFirstAsync("SELECT value FROM app_settings WHERE key = 'requested_customers_removed_20261020'")) return;
-  const accounts = await db.getAllAsync(`SELECT user_id FROM users WHERE role = 'customer' AND (
-    (user_id = 6 AND name = 'David' AND contact = '938321320123') OR
-    (user_id = 9 AND name = 'david' AND contact = '2313123123'))`);
-  let pending = false;
-  for (const { user_id: id } of accounts) {
-    const linked = await db.getFirstAsync(`SELECT
-      (SELECT COUNT(*) FROM equipment WHERE supplier_id = ?) +
-      (SELECT COUNT(*) FROM reservations WHERE customer_id = ?) AS count`, id, id);
-    if (linked.count && !administratorId) {
-      pending = true;
-      continue;
-    }
-    if (administratorId) {
-      await db.runAsync('UPDATE equipment SET supplier_id = ? WHERE supplier_id = ?', administratorId, id);
-      await db.runAsync('UPDATE reservations SET customer_id = ? WHERE customer_id = ?', administratorId, id);
-    }
-    await db.runAsync('DELETE FROM cart_items WHERE customer_id = ?', id);
-    await db.runAsync('DELETE FROM customer_credentials WHERE user_id = ?', id);
-    await db.runAsync('DELETE FROM users WHERE user_id = ?', id);
-    await audit(db, 'User deleted', `Requested removal of customer #${id}`);
-  }
-  if (!pending) await db.runAsync("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('requested_customers_removed_20261020', '1')");
+export function revokeSession(db, profile) { sessions.get(db)?.delete(profile); }
+async function requireSession(db, actor) {
+  if (!actor || !sessions.get(db)?.has(actor)) throw new Error('Please sign in to continue.');
+  const user = await db.getFirstAsync('SELECT role FROM users WHERE user_id = ?', actor.user_id);
+  if (!user || user.role !== actor.role) throw new Error('This account no longer has access.');
+  return actor;
+}
+async function requireAdmin(db, actor) {
+  await requireSession(db, actor);
+  if (actor.role !== 'admin') throw new Error('Administrator access is required.');
+}
+async function administratorId(db) {
+  const row = await db.getFirstAsync("SELECT value FROM app_settings WHERE key = 'fixed_administrator_id'");
+  return row ? Number(row.value) : null;
 }
 
 // Called inside the startup/setup transaction. Never refill a deliberately
 // cleared catalog, or mix sample listings into an existing inventory.
-async function seedStarterEquipment(db, administratorId) {
+async function seedStarterEquipment(db) {
   if (await db.getFirstAsync("SELECT value FROM app_settings WHERE key = 'starter_equipment_v1'")) return;
   const existing = await db.getFirstAsync('SELECT COUNT(*) AS count FROM equipment');
   if (!existing.count) {
@@ -71,152 +46,17 @@ async function seedStarterEquipment(db, administratorId) {
     ];
     for (const item of items) {
       await db.runAsync(`INSERT INTO equipment
-        (supplier_id, name, category, description, daily_rate, total_quantity)
-        VALUES (?, ?, ?, ?, ?, ?)`, administratorId, ...item);
+        (name, category, description, daily_rate, total_quantity)
+        VALUES (?, ?, ?, ?, ?)`, ...item);
     }
   }
   await db.runAsync("INSERT INTO app_settings (key, value) VALUES ('starter_equipment_v1', '1')");
 }
 
-// Schema upgrades preserve records and can run before a migration imports data.
-export async function createDatabaseSchema(db) {
-  await db.execAsync(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA foreign_keys = ON;
-
-    CREATE TABLE IF NOT EXISTS users (
-      user_id INTEGER PRIMARY KEY NOT NULL,
-      name TEXT NOT NULL,
-      contact TEXT,
-      demo_access INTEGER NOT NULL DEFAULT 0 CHECK(demo_access IN (0, 1)),
-      role TEXT NOT NULL CHECK(role IN ('customer', 'supplier', 'admin'))
-    );
-
-    CREATE TABLE IF NOT EXISTS equipment (
-      equipment_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      supplier_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      category TEXT NOT NULL,
-      description TEXT NOT NULL,
-      daily_rate REAL NOT NULL CHECK(daily_rate >= 0),
-      total_quantity INTEGER NOT NULL CHECK(total_quantity >= 0),
-      image_ref TEXT,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      FOREIGN KEY (supplier_id) REFERENCES users(user_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS reservations (
-      reservation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      booking_code TEXT NOT NULL UNIQUE,
-      customer_id INTEGER NOT NULL,
-      start_date TEXT NOT NULL,
-      end_date TEXT NOT NULL,
-      booking_contact TEXT NOT NULL,
-      event_note TEXT,
-      status TEXT NOT NULL DEFAULT 'pending'
-        CHECK(status IN ('pending', 'confirmed', 'completed', 'cancelled')),
-      demo_payment_method TEXT,
-      demo_payment_status TEXT NOT NULL DEFAULT 'not_recorded',
-      total_amount REAL NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (customer_id) REFERENCES users(user_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS reservation_items (
-      item_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      reservation_id INTEGER NOT NULL,
-      equipment_id INTEGER NOT NULL,
-      quantity INTEGER NOT NULL CHECK(quantity > 0),
-      daily_rate_at_booking REAL NOT NULL,
-      line_total REAL NOT NULL,
-      FOREIGN KEY (reservation_id) REFERENCES reservations(reservation_id),
-      FOREIGN KEY (equipment_id) REFERENCES equipment(equipment_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS audit_log (
-      audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      action TEXT NOT NULL,
-      details TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS cart_items (
-      customer_id INTEGER NOT NULL DEFAULT 1,
-      equipment_id INTEGER NOT NULL,
-      quantity INTEGER NOT NULL CHECK(quantity > 0),
-      PRIMARY KEY (customer_id, equipment_id),
-      FOREIGN KEY (customer_id) REFERENCES users(user_id) ON DELETE CASCADE,
-      FOREIGN KEY (equipment_id) REFERENCES equipment(equipment_id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS customer_credentials (
-      user_id INTEGER PRIMARY KEY,
-      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-      password_hash TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_reservation_dates
-      ON reservations(start_date, end_date, status);
-    CREATE INDEX IF NOT EXISTS idx_reservation_items_equipment
-      ON reservation_items(equipment_id);
-  `);
-
-  const userColumns = await db.getAllAsync('PRAGMA table_info(users)');
-  if (!userColumns.some(column => column.name === 'demo_access'))
-    await db.execAsync('ALTER TABLE users ADD COLUMN demo_access INTEGER NOT NULL DEFAULT 0 CHECK(demo_access IN (0, 1));');
-
-  // Upgrade existing single-customer carts without deleting their contents.
-  const cartColumns = await db.getAllAsync('PRAGMA table_info(cart_items)');
-  if (!cartColumns.some(column => column.name === 'customer_id')) {
-    await db.withTransactionAsync(async () => {
-      await db.execAsync(`ALTER TABLE cart_items RENAME TO legacy_cart_items;
-        CREATE TABLE cart_items (
-          customer_id INTEGER NOT NULL DEFAULT 1,
-          equipment_id INTEGER NOT NULL,
-          quantity INTEGER NOT NULL CHECK(quantity > 0),
-          PRIMARY KEY (customer_id, equipment_id),
-          FOREIGN KEY (customer_id) REFERENCES users(user_id) ON DELETE CASCADE,
-          FOREIGN KEY (equipment_id) REFERENCES equipment(equipment_id) ON DELETE CASCADE
-        );
-        INSERT INTO cart_items (customer_id, equipment_id, quantity)
-          SELECT 1, equipment_id, quantity FROM legacy_cart_items;
-        DROP TABLE legacy_cart_items;`);
-    });
-  }
-
-}
-
-async function businessOwnerId(db) {
-  const setting = await db.getFirstAsync("SELECT value FROM app_settings WHERE key = 'business_owner_id'");
-  if (!setting) return null;
-  const owner = await db.getFirstAsync("SELECT user_id FROM users WHERE user_id = ? AND role = 'supplier'", Number(setting.value));
-  return owner?.user_id ?? null;
-}
-
+export async function createDatabaseSchema(db) { await migrateDatabase(db); }
 export async function initializeDatabase(db) {
   await createDatabaseSchema(db);
-  await transaction(db, async () => {
-    let ownerId = await businessOwnerId(db);
-    if (ownerId === null) {
-      const result = await db.runAsync("INSERT INTO users (name, contact, role) VALUES ('EventGear Business', '', 'supplier')");
-      ownerId = result.lastInsertRowId;
-      await db.runAsync("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('business_owner_id', ?)", String(ownerId));
-    }
-    // The business owns inventory; the fixed admin is an authenticated app
-    // identity rather than a registered user in the users table.
-    const oldAdmins = await db.getAllAsync("SELECT user_id FROM users WHERE role = 'admin'");
-    for (const { user_id: id } of oldAdmins) {
-      await db.runAsync('UPDATE equipment SET supplier_id = ? WHERE supplier_id = ?', ownerId, id);
-      await db.runAsync('UPDATE reservations SET customer_id = ? WHERE customer_id = ?', ownerId, id);
-      await db.runAsync('DELETE FROM cart_items WHERE customer_id = ?', id);
-      await db.runAsync('DELETE FROM customer_credentials WHERE user_id = ?', id);
-      await db.runAsync('DELETE FROM users WHERE user_id = ?', id);
-      await audit(db, 'Administrator account replaced', `Removed registered administrator #${id}; preserved business records`);
-    }
-    await removeLegacyDemoAccounts(db, ownerId);
-    await removeRequestedCustomerAccounts(db, ownerId);
-    await seedStarterEquipment(db, ownerId);
-  });
+  await transaction(db, () => seedStarterEquipment(db));
 }
 
 // Parameter binding keeps search text separate from executable SQL.
@@ -371,7 +211,9 @@ export async function getCustomerRentals(db, customerId = null) {
 }
 
 // Separate parent and line-item reads reconstruct the saved booking receipt.
-export async function getRentalDetails(db, reservationId, customerId = null) {
+export async function getRentalDetails(db, reservationId, actor) {
+  await requireSession(db, actor);
+  const customerId = actor.role === 'admin' ? null : actor.user_id;
   const reservation = await db.getFirstAsync(
     'SELECT * FROM reservations WHERE reservation_id = ? AND (? IS NULL OR customer_id = ?)',
     reservationId, customerId, customerId
@@ -387,29 +229,18 @@ export async function getRentalDetails(db, reservationId, customerId = null) {
   return { reservation, items };
 }
 
-export async function getSupplierReservations(db) {
-  return db.getAllAsync(
-    `SELECT r.*, u.name AS customer_name,
-      GROUP_CONCAT(e.name || ' x' || ri.quantity, ', ') AS item_names
-     FROM reservations r
-     JOIN users u ON u.user_id = r.customer_id
-     JOIN reservation_items ri ON ri.reservation_id = r.reservation_id
-     JOIN equipment e ON e.equipment_id = ri.equipment_id
-     GROUP BY r.reservation_id
-     ORDER BY r.created_at DESC, r.reservation_id DESC`
-  );
-}
-
 // Terminal bookings cannot be reopened: released stock may already be booked.
-export async function getAdminEquipmentFilters(db) {
+export async function getAdminEquipmentFilters(db, actor) {
+  await requireAdmin(db, actor);
   return db.getAllAsync(`SELECT equipment_id, name FROM equipment
     WHERE is_active = 1 OR equipment_id IN (SELECT equipment_id FROM reservation_items)
     ORDER BY name`);
 }
 
-export async function getAdminReservations(db, status = 'All', equipmentId = null) {
+export async function getAdminReservations(db, actor, status = 'All', equipmentId = null) {
+  await requireAdmin(db, actor);
   return db.getAllAsync(
-    `SELECT r.*, u.name AS customer_name,
+    `SELECT r.*, COALESCE(r.customer_name_snapshot, u.name) AS customer_name,
        GROUP_CONCAT(e.name || ' x' || ri.quantity, ', ') AS item_names
      FROM reservations r
      JOIN users u ON u.user_id = r.customer_id
@@ -426,7 +257,9 @@ export async function getAdminReservations(db, status = 'All', equipmentId = nul
 export function nextStatuses(status) {
   return { pending: ['confirmed', 'cancelled'], confirmed: ['completed', 'cancelled'], completed: [], cancelled: [] }[status] || [];
 }
-export async function updateReservationStatus(db, reservationId, status, customerId = null) {
+export async function updateReservationStatus(db, reservationId, status, actor) {
+  await requireSession(db, actor);
+  const customerId = actor.role === 'admin' ? null : actor.user_id;
   return transaction(db, async () => {
     const r = await db.getFirstAsync('SELECT * FROM reservations WHERE reservation_id = ?', reservationId);
     if (customerId !== null && (!r || r.customer_id !== customerId || status !== 'cancelled'))
@@ -467,7 +300,8 @@ export async function updateReservationContact(db, reservationId, contact, note,
   });
 }
 
-export async function saveEquipment(db, form, equipmentId, supplierId = null) {
+export async function saveEquipment(db, form, equipmentId, actor) {
+  await requireAdmin(db, actor);
   const rate = Number(form.dailyRate), stock = Number(form.totalQuantity);
   if (!form.name.trim() || !form.category.trim() || !form.description.trim()) throw new Error('Complete all equipment details.');
   if (!form.dailyRate.trim() || !Number.isFinite(rate) || rate < 0) throw new Error('Enter a valid daily rate.');
@@ -481,13 +315,14 @@ export async function saveEquipment(db, form, equipmentId, supplierId = null) {
       if (stock < old.total_quantity - available) throw new Error('Quantity cannot be lower than stock committed to current or future bookings.');
       await db.runAsync(`UPDATE equipment SET name = ?, category = ?, description = ?, daily_rate = ?, total_quantity = ?, image_ref = ? WHERE equipment_id = ?`, ...values, equipmentId);
     } else {
-      await db.runAsync(`INSERT INTO equipment (supplier_id, name, category, description, daily_rate, total_quantity, image_ref) VALUES (?, ?, ?, ?, ?, ?, ?)`, supplierId, ...values);
+      await db.runAsync(`INSERT INTO equipment (name, category, description, daily_rate, total_quantity, image_ref) VALUES (?, ?, ?, ?, ?, ?)`, ...values);
     }
     await audit(db, equipmentId ? 'Equipment updated' : 'Equipment created', form.name.trim());
   });
 }
 
-export async function updateEquipmentQuantity(db, equipmentId, quantity) {
+export async function updateEquipmentQuantity(db, equipmentId, quantity, actor) {
+  await requireAdmin(db, actor);
   if (String(quantity).trim() === '' || !Number.isSafeInteger(Number(quantity)) || Number(quantity) < 0)
     throw new Error('Enter a nonnegative whole-number quantity.');
   const stock = Number(quantity);
@@ -501,7 +336,8 @@ export async function updateEquipmentQuantity(db, equipmentId, quantity) {
   });
 }
 
-export async function deleteEquipment(db, equipmentId) {
+export async function deleteEquipment(db, equipmentId, actor) {
+  await requireAdmin(db, actor);
   return transaction(db, async () => {
     const booked = await db.getFirstAsync(`SELECT COUNT(*) AS count FROM reservation_items ri
       JOIN reservations r ON r.reservation_id = ri.reservation_id WHERE ri.equipment_id = ?
@@ -514,7 +350,8 @@ export async function deleteEquipment(db, equipmentId) {
     await audit(db, history.count ? 'Equipment archived' : 'Equipment deleted', `Equipment #${equipmentId}`);
   });
 }
-export async function getAdminCustomers(db) {
+export async function getAdminCustomers(db, actor) {
+  await requireAdmin(db, actor);
   return db.getAllAsync(`SELECT u.*, c.email, c.created_at AS registered_at
     FROM users u LEFT JOIN customer_credentials c ON c.user_id = u.user_id
     WHERE ${visibleAdminCustomerPredicate} ORDER BY u.user_id`);
@@ -540,7 +377,7 @@ export async function registerCustomer(db, form, randomBytes, setupAdministrator
     const result = await db.runAsync("INSERT INTO users (name, contact, role) VALUES (?, ?, 'customer')", name, contact);
     await db.runAsync('INSERT INTO customer_credentials (user_id, email, password_hash) VALUES (?, ?, ?)', result.lastInsertRowId, email, passwordHash);
     await audit(db, 'Customer registered', `Customer #${result.lastInsertRowId}`);
-    return { user_id: result.lastInsertRowId, name, contact, role: 'customer', email };
+    return rememberSession(db, { user_id: result.lastInsertRowId, name, contact, role: 'customer', email });
   });
 }
 
@@ -548,9 +385,9 @@ export async function signInCustomer(db, email, password, randomBytes) {
   if (typeof password !== 'string' || password.length > 128) throw new Error('Incorrect email, username or password.');
   if ((email || '').trim().toLowerCase() === administratorUsername.toLowerCase()) {
     if (!(await verifyPassword(password, administratorPasswordHash))) throw new Error('Incorrect email, username or password.');
-    const ownerId = await businessOwnerId(db);
-    if (ownerId === null) throw new Error('Please reload EventGear to prepare the database.');
-    return { user_id: ownerId, name: administratorUsername, contact: '', role: 'admin', email: null };
+    const adminId = await administratorId(db);
+    if (adminId === null) throw new Error('Please reload EventGear to prepare the database.');
+    return rememberSession(db, { user_id: adminId, name: administratorUsername, contact: '', role: 'admin', email: null });
   }
   const user = await db.getFirstAsync(`SELECT u.*, c.email, c.password_hash
     FROM users u JOIN customer_credentials c ON c.user_id = u.user_id
@@ -561,28 +398,29 @@ export async function signInCustomer(db, email, password, randomBytes) {
     const nextHash = await hashPassword(password, randomBytes);
     await db.runAsync('UPDATE customer_credentials SET password_hash = ? WHERE user_id = ? AND password_hash = ?', nextHash, user.user_id, user.password_hash);
   }
-  return { user_id: user.user_id, name: user.name, contact: user.contact, role: user.role, email: user.email };
+  return rememberSession(db, { user_id: user.user_id, name: user.name, contact: user.contact, role: user.role, email: user.email });
 }
 
 async function protectLastAdministrator(db, id) {
- if (await businessOwnerId(db) === Number(id)) throw new Error('The fixed administrator business record cannot be removed.');
- const account = await db.getFirstAsync("SELECT u.role FROM users u JOIN customer_credentials c ON c.user_id = u.user_id WHERE u.user_id = ?", id);
+ if (await administratorId(db) === Number(id)) throw new Error('The fixed administrator account cannot be removed.');
+ const account = await db.getFirstAsync('SELECT role FROM users WHERE user_id = ?', id);
  if (account?.role === 'admin') {
-  const others = await db.getFirstAsync("SELECT COUNT(*) AS count FROM users u JOIN customer_credentials c ON c.user_id = u.user_id WHERE u.role = 'admin' AND u.user_id <> ?", id);
+  const others = await db.getFirstAsync("SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND user_id <> ?", id);
   if (!others.count) throw new Error('The last administrator cannot be removed or assigned another role.');
  }
 }
-export async function deleteUser(db, id) {
+export async function deleteUser(db, id, actor) {
+  await requireAdmin(db, actor);
   return transaction(db, async () => {
     await protectLastAdministrator(db, id);
-    const refs = await db.getFirstAsync(`SELECT (SELECT COUNT(*) FROM equipment WHERE supplier_id = ?) +
-      (SELECT COUNT(*) FROM reservations WHERE customer_id = ?) AS count`, id, id);
+    const refs = await db.getFirstAsync(`SELECT COUNT(*) AS count FROM reservations WHERE customer_id = ?`, id);
     if (refs.count) throw new Error('This user has linked records and cannot be deleted.');
     await db.runAsync('DELETE FROM users WHERE user_id = ?', id);
     await audit(db, 'User deleted', `User #${id}`);
   });
 }
-export async function getAdminOverview(db, today = localToday()) {
+export async function getAdminOverview(db, actor, today = localToday()) {
+  await requireAdmin(db, actor);
   if (!validDate(today)) throw new Error('Choose a valid overview date.');
   const stats = await db.getFirstAsync(`SELECT
     (SELECT COUNT(*) FROM users u WHERE ${visibleAdminCustomerPredicate}) AS users,
@@ -596,7 +434,8 @@ export async function getAdminOverview(db, today = localToday()) {
   return { stats, statuses, todayStats };
 }
 
-export async function getAdminReportSummary(db, period = 'Day', today = localToday()) {
+export async function getAdminReportSummary(db, actor, period = 'Day', today = localToday()) {
+  await requireAdmin(db, actor);
   if (!['Day', 'Month', 'Year'].includes(period) || !validDate(today))
     throw new Error('Choose a valid report period.');
   const start = period === 'Day' ? today : period === 'Month' ? `${today.slice(0, 7)}-01` : `${today.slice(0, 4)}-01-01`;

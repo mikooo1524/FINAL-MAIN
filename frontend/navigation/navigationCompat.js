@@ -3,12 +3,10 @@ import { router, useNavigation } from 'expo-router';
 
 // Map existing screen names to Expo Router paths (powered by React Navigation).
 function targetFor(name, params = {}) {
-  if (['users', 'reservations', 'reports'].includes(name)) return `/(admin)/${name}`;
+  if (['users', 'equipments', 'reservations', 'reports'].includes(name)) return `/(admin)/${name}`;
   if (name === 'Admin') return '/(admin)';
   if (name === 'CustomerAuth') return { pathname: '/customer-auth', params };
   if (name === 'Equipment') return '/(customer)/equipment';
-  if (name === 'Manage Equipment') return '/(supplier)/manage-equipment';
-  if (name === 'Reservations') return '/(supplier)/reservations';
   if (name === 'CustomerTabs') {
     const child = params?.screen;
     return child === 'Cart'
@@ -18,14 +16,6 @@ function targetFor(name, params = {}) {
         : child === 'Equipment'
           ? '/(customer)/equipment'
           : '/(customer)';
-  }
-  if (name === 'SupplierTabs') {
-    const child = params?.screen;
-    return child === 'Reservations'
-      ? '/(supplier)/reservations'
-      : child === 'Manage Equipment'
-        ? '/(supplier)/manage-equipment'
-        : '/(supplier)';
   }
   if (name === 'EquipmentDetails') {
     return { pathname: '/equipment-details', params };

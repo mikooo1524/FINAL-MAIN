@@ -33,7 +33,7 @@ function LoadingScreen() {
 }
 
 function Navigation() {
-  const { canAccessCustomer, canAccessSupplier, canAccessAdmin } = useApp();
+  const { canAccessCustomer, canAccessAdmin } = useApp();
   return (
     <ThemeProvider value={navigationTheme}>
       <StatusBar style="light" />
@@ -55,12 +55,9 @@ function Navigation() {
         <Stack.Screen name="checkout" options={{ title: 'Checkout' }} />
         <Stack.Screen name="payment" options={{ title: 'Demo Payment' }} />
         </Stack.Protected>
-        <Stack.Protected guard={canAccessSupplier}>
-        <Stack.Screen name="(supplier)" options={{ headerShown: false }} />
-        <Stack.Screen name="equipment-form" options={{ title: 'Equipment' }} />
-        </Stack.Protected>
         <Stack.Protected guard={canAccessAdmin}>
         <Stack.Screen name="(admin)" options={{ headerShown: false }} />
+        <Stack.Screen name="equipment-form" options={{ title: 'Equipment' }} />
         </Stack.Protected>
         <Stack.Screen name="rental-details" options={{ title: 'Rental Details' }} />
       </Stack>

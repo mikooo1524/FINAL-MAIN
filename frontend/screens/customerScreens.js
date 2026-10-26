@@ -371,7 +371,7 @@ export function PaymentScreen({ navigation }) {
       <ScrollView style={styles.page} contentContainerStyle={styles.successContent}>
         <View style={styles.successCircle}><Text style={styles.successCheck}>✓</Text></View>
         <Text style={styles.successTitle}>Reservation created!</Text>
-        <Text style={styles.successText}>Your equipment is pending supplier confirmation.</Text>
+        <Text style={styles.successText}>Your equipment is pending admin confirmation.</Text>
         <View style={styles.bookingCodeBox}><Text style={styles.bookingCodeLabel}>BOOKING ID</Text><Text style={styles.bookingCode}>{confirmation.bookingCode}</Text></View>
         <Money value={confirmation.total} style={{ fontSize: 28, marginVertical: 20 }} />
         <StatusPill status="pending" />
@@ -425,7 +425,6 @@ export function MyRentalsScreen({ navigation }) {
 export function RentalDetailsScreen({ navigation, route }) {
   const { db, refreshRentals, refreshEquipment, customer } = useApp();
   const customerId = customer?.user_id || -1;
-  const management = route.params?.viewer === 'management';
   const [contact, setContact] = useState('');
   const [note, setNote] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -436,12 +435,12 @@ export function RentalDetailsScreen({ navigation, route }) {
   const [loaded, setLoaded] = useState(false);
   const loadDetails = useCallback(async () => {
     try {
-      const next = await getRentalDetails(db, route.params.reservationId, management ? null : customerId);
+      const next = await getRentalDetails(db, route.params.reservationId, customer);
       setData(next); setContact(next.reservation?.booking_contact || ''); setNote(next.reservation?.event_note || '');
       setStartDate(next.reservation?.start_date || ''); setEndDate(next.reservation?.end_date || '');
     } catch (error) { Alert.alert('Could not load rental', error.message); }
     finally { setLoaded(true); }
-  }, [db, route.params.reservationId, management, customerId]);
+  }, [db, route.params.reservationId, customer]);
   useFocusEffect(useCallback(() => { loadDetails(); }, [loadDetails]));
   async function changeBooking(cancel = false) {
     if (busy) return;
@@ -455,7 +454,7 @@ export function RentalDetailsScreen({ navigation, route }) {
     }
     setBusy(true);
     try {
-      if (cancel) await updateReservationStatus(db, route.params.reservationId, 'cancelled', customerId);
+      if (cancel) await updateReservationStatus(db, route.params.reservationId, 'cancelled', customer);
       else await updateReservationContact(db, route.params.reservationId, contact, note, startDate, endDate, customerId);
       await Promise.all([loadDetails(), refreshRentals(), refreshEquipment()]);
       Alert.alert(cancel ? 'Reservation cancelled' : 'Details saved',

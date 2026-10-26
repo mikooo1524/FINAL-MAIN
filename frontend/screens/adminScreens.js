@@ -11,7 +11,7 @@ import { formatCompactNumber } from '../utils/numberFormatting';
 
 // Focus refresh keeps administrator totals synchronized with equipment and booking changes.
 function useOverview(period = null) {
-  const { db } = useApp();
+  const { db, customer } = useApp();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -20,12 +20,12 @@ function useOverview(period = null) {
     const id = ++request.current;
     setLoading(true); setError('');
     try {
-      const [overview, summary] = await Promise.all([getAdminOverview(db), period ? getAdminReportSummary(db, period) : Promise.resolve(null)]);
+      const [overview, summary] = await Promise.all([getAdminOverview(db, customer), period ? getAdminReportSummary(db, customer, period) : Promise.resolve(null)]);
       if (id === request.current) setData({ ...overview, summary });
     }
     catch (reason) { if (id === request.current) setError(reason.message); }
     finally { if (id === request.current) setLoading(false); }
-  }, [db, period]);
+  }, [db, customer, period]);
   useFocusEffect(useCallback(() => { load(); }, [load]));
   return { data, loading, error, load };
 }
@@ -43,7 +43,7 @@ export function AdminDashboardScreen({ navigation }) {
     <View style={styles.card}><Text style={styles.heading}>Confirmed rental value</Text><Money value={stats.value} style={{ fontSize: 28, marginTop: 8 }} />
       <Text style={styles.muted}>Confirmed and completed bookings. This is rental value, not collected payments.</Text></View>
     <SectionTitle title="Management" />
-    {[['users', '👥 User directory', 'View and remove customer accounts.'], ['reservations', '📋 Reservations', 'Review customer bookings and update progress.'], ['reports', '📊 Reports & activity', 'Review status totals and recent database actions.']].map(([route, title, text]) =>
+    {[['equipments', 'Equipment management', 'Add listings, edit details and update inventory.'], ['users', '👥 User directory', 'View and remove customer accounts.'], ['reservations', '📋 Reservations', 'Review customer bookings and update progress.'], ['reports', '📊 Reports & activity', 'Review status totals and recent database actions.']].map(([route, title, text]) =>
       <Pressable key={route} style={styles.card} onPress={() => navigation.navigate(route)}><Text style={styles.heading}>{title} ›</Text><Text style={styles.muted}>{text}</Text></Pressable>)}
     </ScrollView>;
 }
@@ -75,7 +75,7 @@ function TodayOverview({ data, navigation }) {
     </View>
     <View style={styles.todayGrid}>{[
       ['Customers', stats.users, 'users', 'users'],
-      ['Equipment', stats.equipment, 'cube'],
+      ['Equipment', stats.equipment, 'cube', 'equipments'],
       ['Today’s bookings', todayStats.bookings, 'calendar', 'reservations'],
       ['Pending approvals', todayStats.pending, 'clock', 'reservations'],
       ['Confirmed rentals', statuses.find(row => row.status === 'confirmed')?.count || 0, 'check', 'reservations'],
@@ -98,16 +98,16 @@ export function AdminUsersScreen() {
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const savedUsers = await getAdminCustomers(db);
+      const savedUsers = await getAdminCustomers(db, customer);
       setUsers(savedUsers);
     } catch (error) { Alert.alert('Could not load users', error.message); }
     finally { setRefreshing(false); }
-  }, [db]);
+  }, [db, customer]);
   useFocusEffect(useCallback(() => { load(); }, [load]));
   function remove(user) {
     Alert.alert('Delete user?', `Remove ${user.name}? This action cannot be undone.`, [{ text: 'Keep', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
-        try { await deleteUser(db, user.user_id); }
+        try { await deleteUser(db, user.user_id, customer); }
         catch (error) { Alert.alert('Could not delete user', error.message); return; }
         if (customer?.user_id === user.user_id) signOut();
         await load(); Alert.alert('User deleted', 'The user record was removed.');

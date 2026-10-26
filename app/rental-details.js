@@ -6,9 +6,9 @@ import { useCompatNavigation } from '../frontend/navigation/navigationCompat';
 export default function RentalDetailsRoute() {
   const params = useLocalSearchParams();
   const navigation = useCompatNavigation();
-  const { customer, canAccessManagement, canAccessCustomer } = useApp();
+  const { customer, canAccessAdmin, canAccessCustomer } = useApp();
   if (!customer) return <Redirect href="/customer-auth" />;
-  if (params.viewer === 'management' && !canAccessManagement) return <Redirect href="/role-selection" />;
+  if (params.viewer === 'management' && !canAccessAdmin) return <Redirect href="/role-selection" />;
   if (params.viewer !== 'management' && !canAccessCustomer) return <Redirect href="/role-selection" />;
   return <RentalDetailsScreen navigation={navigation} route={{ params }} />;
 }

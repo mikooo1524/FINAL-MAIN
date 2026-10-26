@@ -19,19 +19,24 @@ npx expo start
 Open with an Expo Go version supporting **SDK 57**, or build an Android APK.
 Choose **Sign in as Administrator** and use username **EventGear Admin** and
 password **EventGear2026**. This is a fixed project login; no administrator
-registration is needed. Other accounts register as customers; an
-administrator can use **⇄ Supplier** and **⇄ Admin** in the dashboard header to switch
-between Supplier and Administrator views. Regular customers stay in the customer view.
+registration is needed. The only roles are **Customer** and **Admin**.
+Admin tabs are **Dashboard | Users | Equipments | Bookings | Reports**;
+equipment management is the center tab. Customers stay in the customer view.
 The admin Users list and dashboard customer total include only non-demo customers.
 First launch creates six starter equipment listings with bundled photos,
 sample daily rates and stock quantities. No demo customer accounts are created.
-Suppliers and administrators can edit these listings or add equipment.
+Admins can edit these listings or add equipment.
 
-On upgrade, registered administrator accounts and legacy demo accounts are
-removed. Linked inventory and booking history transfer to an internal
-**EventGear Business** supplier record. That record cannot be deleted; the fixed
-administrator login is separate and does not create an administrator row in
-`users` or `customer_credentials`.
+Database version 2 stores equipment as central inventory without per-account
+ownership. Its transactional migration preserves equipment IDs, photos, archived
+listings, customer accounts and credentials, carts, bookings, items and audit history.
+Retired inventory accounts are removed without granting them admin access. Their
+booking references move to a separate fixed admin record; receipts retain their
+original names. Foreign keys are checked before commit, and a failed migration
+rolls back. Reopening an upgraded database does not repeat the migration or seed
+deleted equipment. The fixed admin has a protected `users` row and no stored
+customer credentials. Historical-role literals remain only in migration code
+to recognize older databases during upgrades.
 
 Each new browser, private session or app installation receives the same starter
 equipment and fixed administrator login. Customer accounts, bookings, photos and
@@ -47,11 +52,9 @@ clearing site data also removes that browser's database.
   quantities, persistent cart, rental dates/contact/notes, availability,
   checkout, payment-method demo, booking confirmation, history/details,
   pending dates/contact/note edits, and cancellation with stock release.
-- **Supplier:** dashboard, equipment CRUD, validation of rates and stock,
-  booking review with contact/notes/details,
-  and success/error confirmations.
 - **Administrator:** overview, user-directory CRUD with registered customer details,
-  last-administrator protection, booking status updates and rental-value reports.
+  protected admin identity, equipment listing/add/edit/photos/stock/removal,
+  booking filters and status updates, receipts, and rental-value reports.
 - **UX:** custom EventGear logo, navy/teal branding, reusable components,
   accessible buttons, mobile/web dialogs, loading/error/empty states,
   pull-to-refresh and responsive layouts.
@@ -88,8 +91,10 @@ money, and never marks payment collected. Reports show rental value, not revenue
 
 ## Structure and comments
 
-- `app/`: Expo Router root stack and nested customer/supplier/admin tabs.
-- `frontend/screens/`: customer, supplier, administrator and role selection screens.
+- `app/`: Expo Router root stack and nested customer/admin tabs.
+- `frontend/screens/`: customer, administrator and sign-in landing screens.
+- `frontend/screens/adminEquipmentScreens.js`: admin inventory and equipment forms.
+- `frontend/screens/AdminBookingsScreen.js`: dedicated admin booking management.
 - `frontend/components/`: shared UI, dialogs, icons and database startup/recovery UI.
 - `frontend/context/`: shared application state and SQLite cart hydration/persistence.
 - `frontend/navigation/`: navigation helpers used by the screens.
@@ -118,11 +123,8 @@ Lint and compiler
 configuration checks passed. `checkJs` is disabled, so the latter is not full
 static type verification. Android Hermes and web exports passed.
 
-The running Chromium app was tested at phone widths (including 320px) and
-on desktop. The workflow checked cart persistence after reload, booking,
-contact editing, supplier create/delete/status updates, administrator user
-creation and reports, with no runtime errors. PNGs in `docs/screenshots` are
-actual web-app captures. Native APK installation still needs testing on a phone.
+Before presenting, verify login, equipment management, customer booking,
+admin approval and saved data after reopening the app on an Android phone.
 
 ## Optional web preview
 
@@ -138,9 +140,14 @@ headers and SPA route fallback.
 
 ## APK submission
 
-**No APK has been generated here.** This workspace has no configured Android
-SDK/Gradle build toolchain or authenticated Expo project. The Android export
-is a JavaScript bundle, **not an installable APK**.
+The Customer/Admin APK was built with EAS using the `preview` profile:
+[download the APK](https://expo.dev/artifacts/eas/u-UaafEiDzvJEdS1uGKQP1k5FY0_oJU5QherFEZvSxA.apk)
+or open its [build page](https://expo.dev/accounts/mikonxy/projects/eventgear/builds/9a40c88f-be97-44c3-8286-3c557f5d3545).
+Its package ID and signing certificate match the earlier APK. Install it over
+the existing installation to retain SQLite data and run the migration. Do not
+uninstall or clear app data first. Verify the upgrade and required app flows on
+an Android phone before submission. Rebuild again after future code changes.
+An `expo export` output alone is a JavaScript bundle, **not an installable APK**.
 
 `eas.json` contains an internal preview profile with `android.buildType: "apk"`,
 following https://docs.expo.dev/build-reference/apk/ . On your computer run:
