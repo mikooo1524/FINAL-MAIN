@@ -8,7 +8,7 @@ partial app for the CS15L functional project scope.
 
 ## Run in VS Code
 
-Install Node.js **24 LTS** (tests use its built-in SQLite), extract this folder,
+Install Node.js **24 LTS**, extract this folder,
 open it in VS Code, then run:
 
 ```bash
@@ -88,32 +88,33 @@ money, and never marks payment collected. Reports show rental value, not revenue
 
 ## Structure and comments
 
-- `src/app/`: root stack and nested customer/supplier/admin tabs.
-- `src/customerScreens.js`, `supplierScreens.js`, `adminScreens.js`: role screens.
-- `src/database.js`: schema, validation, queries, transactions and audit log.
-- `src/AppContext.js`: shared lists, SQLite cart hydration/persistence.
-- `src/components.js`, `feedback.js`, `theme.js`: shared UI and dialogs.
-- `src/DatabaseGate.js`: startup/error recovery and web locking.
+- `app/`: Expo Router root stack and nested customer/supplier/admin tabs.
+- `frontend/screens/`: customer, supplier, administrator and role selection screens.
+- `frontend/components/`: shared UI, dialogs, icons and database startup/recovery UI.
+- `frontend/context/`: shared application state and SQLite cart hydration/persistence.
+- `frontend/navigation/`: navigation helpers used by the screens.
+- `frontend/styles/`: shared theme, colors and styling constants.
+- `frontend/utils/`: equipment photo and number formatting helpers.
+- `backend/data/`: local SQLite schema, queries, transactions, audit log and web locking.
+- `backend/services/`: password hashing and fixed administrator credentials.
 - `assets/`: custom logo and supplied equipment photos.
-- `tests/`: SQLite and web-lock regression tests.
 - `docs/`: requirement map, presentation guide, actual screenshots and PDF.
-- `scripts/`: web preview and documentation generation.
 
 Comments explain the major data, validation, state and navigation blocks.
+
+The backend folder contains local application logic bundled with the app; it is
+not a separate server. Expo Router discovers routes in the root `app/` folder.
 
 ## Checks
 
 ```bash
 npm run lint -- --no-cache
-npm test
 npm run typecheck
 npx expo export --platform android --output-dir dist-android
 npx expo export --platform web --output-dir dist-web
 ```
 
-15 tests run production SQL in real SQLite, covering CRUD, dates/numbers,
-atomic booking writes, concurrency, stock availability, lifecycle rules,
-history, protected users, seed persistence, and web locks. Lint and compiler
+Lint and compiler
 configuration checks passed. `checkJs` is disabled, so the latter is not full
 static type verification. Android Hermes and web exports passed.
 
@@ -123,28 +124,17 @@ contact editing, supplier create/delete/status updates, administrator user
 creation and reports, with no runtime errors. PNGs in `docs/screenshots` are
 actual web-app captures. Native APK installation still needs testing on a phone.
 
-For the repeatable browser check, export the web app to the test directory and run:
-
-```bash
-npx expo export --platform web --output-dir dist-test/customer-auth
-npm run test:auth-ui
-```
-
-This checks registration input restrictions, sign-in, administrator switching
-between Supplier and Administrator, and the customer-only admin directory.
-
 ## Optional web preview
 
-Web SQLite needs a secure context and cross-origin isolation. The local server
-supplies those headers and SPA fallback:
+Start Expo's web development server:
 
 ```bash
-npx expo export --platform web --output-dir dist-web
-python scripts/serve_web.py
+npm run web
 ```
 
-Open `http://localhost:8765`. Use one tab at a time for the SQLite file.
-This server is a local development preview.
+Use the address printed by Expo. Use one tab at a time for the SQLite file.
+Hosting an exported web build requires a secure context, cross-origin isolation
+headers and SPA route fallback.
 
 ## APK submission
 
@@ -184,11 +174,6 @@ on Windows or `./gradlew assembleDebug` on macOS/Linux. The usual output is
 The PDF contains title, description, major-screen screenshots, database
 structure, stack, architecture, verification, run/build instructions and demo.
 The detailed PDF mapping is in `docs/REQUIREMENTS_CHECKLIST.md`.
-
-To regenerate after adding team names, install `reportlab` and `pillow`, set
-`EVENTGEAR_TEAM_MEMBERS` to the actual names, then run
-`python scripts/generate_docs.py`. In PowerShell, set the variable with
-`$env:EVENTGEAR_TEAM_MEMBERS="Name 1; Name 2"`.
 
 ## Scope
 
